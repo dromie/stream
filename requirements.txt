@@ -1,2 +1,1 @@
-twisted
-requests
+twisted==17.9.0
