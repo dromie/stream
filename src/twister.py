@@ -1,89 +1,94 @@
 #!/usr/bin/env python
 import sys
 
-from twisted.internet import reactor,protocol, endpoints
-from twisted.protocols.portforward import Proxy
+from twisted.internet.protocol import  ReconnectingClientFactory, ProcessProtocol
+from twisted.protocols.portforward import Proxy, ProxyClientFactory
+
+class EncoderControll(ProcessProtocol):
+    def __init__(self, twister, idle=True):
+        self.twister = twister
+        self.idle = idle
+
+    def processEnded(self, status):
+        print("Process ended: %s" % status)
+        self.twister.encoderStopped(self.idle)
+
+    def outReceived(self,data):
+        print("PP: %s" % data)
+
+class EncoderFactory(ProxyClientFactory):
+    def __init__(self,twister):
+        self.twister = twister
+    
+    def command_line(self,host):
+        return ("nc",["nc",host.host,str(host.port)])
+    
+    def startEncoder(self, host):
+        print("StartEncoder: ", host)
+        control = EncoderControll(self.twister,False)
+        p = self.command_line(host)
+        print("cmd: %s, args: %s"%(p[0],p[1]))
+        from twisted.internet import reactor
+        reactor.spawnProcess(control,p[0],p[1])
 
 class CameraFeed(Proxy):
+    def __init__(self,twister):
+        self.twister = twister
 
-  def connectionMade(self):
-    print("Connected to camera feed")
-    self.transport.pauseProducing()
+    def connectionMade(self):
+        print("Connected to camera feed")
+        self.transport.pauseProducing()
+        encoder = EncoderFactory(self.twister)
+        encoder.setServer(self)
+        from twisted.internet import reactor
+        port = reactor.listenTCP(0, encoder)
+        encoder.startEncoder(port.getHost())
 
+    def connectionLost(self, reason):
+        print("Connection lost..")
 
-  def connectionLost(self, reason):
-    print("Connection lost..")
-
-  def dataReceived(self,data):
-    print("Data received: %s"%data)
-    super(self,data)
-
-
-class EncoderFeed(Proxy):
-  def connectionMade(self):
-    print("Connected to encoder")
-    self.transport.registerProducer(self.peer.transport, True)
-    self.peer.transport.registerProducer(self.transport, True)
-    self.peer.transport.resumeProducing()
-
+    def dataReceived(self, data):
+        print("Data received: %s" % data)
+        Proxy.dataReceived(self, data)
+    
 
 
-class ListenFactory(protocol.Factory):
+class Twister(ReconnectingClientFactory):
 
-  def setPeerFactory(self,factory):
-    self.factory = factory
+    def __init__(self,host,port):
+        from twisted.internet import reactor
+        reactor.connectTCP(host, port, self)
+        
+    def startedConnecting(self, connector):
+        print('Started to connect.')
 
-  def buildProtocol(self,addr):
-    encoder = EncoderFeed()
-    encoder.setPeer(self.peer)
-    return encoder
+    def buildProtocol(self, addr):
+        print("Connected to %s" % addr)
+        return CameraFeed(self)
 
+    def clientConnectionLost(self, connector, reason):
+        print('Lost connection.  Reason:', reason)
+        ReconnectingClientFactory.clientConnectionLost(self, connector, reason)
 
-class Twister(protocol.ReconnectingClientFactory):
-
-  def __init__(self, listen_endpoint, stream):
-    self.listen_endpoint = listen_endpoint
-    self.stream = stream
- 
-  def startedConnecting(self, connector):
-    print('Started to connect.')
-
-  def buildProtocol(self,addr):
-    print("Connected to %s" %addr)
-    feed = CameraFeed()
-    print("sss")
-    lf = ListenFactory(feed)
-    print("dd")
-    d = self.listen_endpoint.listen(lf)
-    return feed
-
-  def start_stream(self):
-    print("Starting stream....")
-    self.factory.stream.start_stream(self.listen_endpoint)
-
-  def clientConnectionLost(self, connector, reason):
-    print('Lost connection.  Reason:', reason)
-    ReconnectingClientFactory.clientConnectionLost(self, connector, reason)
-
-  def clientConnectionFailed(self, connector, reason):
-    print('Connection failed. Reason:', reason)
-    ReconnectingClientFactory.clientConnectionFailed(self, connector, reason)
+    def clientConnectionFailed(self, connector, reason):
+        print('Connection failed. Reason: %s, delay: %d', (reason, self.delay))
+        ReconnectingClientFactory.clientConnectionFailed(self, connector, reason)
   
-
-consumer=sys.argv[1]
-producer=sys.argv[2]
-
+    def encoderStopped(self, isIdle):
+        if isIdle:
+            pass
+        else:
+            pass
+      
+rtsp_host = sys.argv[1]
+rtsp_port = int(sys.argv[2])
 print("Start")
 
-print("From: (%s) to: (%s)"%(producer,consumer))
+print("From: (%s:%d)" % (rtsp_host, rtsp_port))
+twister = Twister(rtsp_host,rtsp_port)
 
-ep_producer=endpoints.clientFromString(reactor, producer)
-ep_consumer=endpoints.serverFromString(reactor, consumer)
 
-print("Connect")
-ep_producer.connect(Twister(ep_consumer,None))
-ep_consumer.listen(
-
+from twisted.internet import reactor
 print("run")
 reactor.run()
 
