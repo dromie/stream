@@ -1,0 +1,7 @@
+#!/bin/bash
+echo "Start test...."
+while [ 0 ];do 
+  echo connecting....
+  nc $1 $2
+  echo "connection lost...retry..."
+done

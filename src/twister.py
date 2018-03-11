@@ -16,20 +16,22 @@ class EncoderControll(ProcessProtocol):
     def outReceived(self,data):
         print("PP: %s" % data)
 
+    def stopProcess(self):
+        print("Sending TERM singal")
+        self.transport.signalProcess('TERM')
+
 class EncoderFactory(ProxyClientFactory):
     def __init__(self,twister):
         self.twister = twister
     
-    def command_line(self,host):
-        return ("nc",["nc",host.host,str(host.port)])
-    
     def startEncoder(self, host):
         print("StartEncoder: ", host)
         control = EncoderControll(self.twister,False)
-        p = self.command_line(host)
+        p = self.twister.command_line(host)
         print("cmd: %s, args: %s"%(p[0],p[1]))
         from twisted.internet import reactor
         reactor.spawnProcess(control,p[0],p[1])
+        return control
 
 class CameraFeed(Proxy):
     def __init__(self,twister):
@@ -42,10 +44,11 @@ class CameraFeed(Proxy):
         encoder.setServer(self)
         from twisted.internet import reactor
         port = reactor.listenTCP(0, encoder)
-        encoder.startEncoder(port.getHost())
+        self.processcontrol = encoder.startEncoder(port.getHost())
 
     def connectionLost(self, reason):
         print("Connection lost..")
+        self.processcontrol.stopProcess()
 
     def dataReceived(self, data):
         print("Data received: %s" % data)
@@ -55,9 +58,13 @@ class CameraFeed(Proxy):
 
 class Twister(ReconnectingClientFactory):
 
-    def __init__(self,host,port):
+    def __init__(self,host,port,cmdline = None):
         from twisted.internet import reactor
         reactor.connectTCP(host, port, self)
+        self.cmdLine = cmdline
+        if not self.cmdLine:
+          self.cmdLine = ["nc","{host}", "{port}"]
+        print(self.cmdLine)
         
     def startedConnecting(self, connector):
         print('Started to connect.')
@@ -74,22 +81,32 @@ class Twister(ReconnectingClientFactory):
         print('Connection failed. Reason: %s, delay: %d', (reason, self.delay))
         ReconnectingClientFactory.clientConnectionFailed(self, connector, reason)
   
+    def command_line(self,host):
+        target= {"host": host.host, "port":str(host.port)}
+        l = list([ e.format(**target) for e in self.cmdLine ])
+        return (l[0],l)
+    
     def encoderStopped(self, isIdle):
         if isIdle:
             pass
         else:
             pass
-      
-rtsp_host = sys.argv[1]
-rtsp_port = int(sys.argv[2])
-print("Start")
 
-print("From: (%s:%d)" % (rtsp_host, rtsp_port))
-twister = Twister(rtsp_host,rtsp_port)
+if __name__ == '__main__':
+  rtsp_host = sys.argv[1]
+  rtsp_port = int(sys.argv[2])
+  cmdLine=None
+  if (len(sys.argv)>2):
+    cmdLine = sys.argv[3].split(',')
+  print("Start")
+
+  print("From: (%s:%d)" % (rtsp_host, rtsp_port))
+  print("cmdLine: ",cmdLine)
+  twister = Twister(rtsp_host,rtsp_port,cmdLine)
 
 
-from twisted.internet import reactor
-print("run")
-reactor.run()
+  from twisted.internet import reactor
+  print("run")
+  reactor.run()
 
-print("end")
+  print("end")
